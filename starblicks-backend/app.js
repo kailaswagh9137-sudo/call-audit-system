@@ -39,11 +39,16 @@ app.post("/ingest", upload.fields([{ name: "agent_audio" }, { name: "customer_au
 
     async function transcribe(file) {
       const audioData = fs.createReadStream(file);
+
       const transcript = await openai.audio.transcriptions.create({
-          model: "whisper-1",
+          model: "gpt-4o-audio-preview",
           file: audioData,
-          response_format: "text"
+          response_format: "text",
+          language: "hi",
+          temperature: 0,
+          prompt: "Transcribe EXACT spoken Hindi & Hinglish — raw words including slang, abusive words, interjections, fillers (haan ji, hmm, arre, okay), regional accent, broken words. NO correction, NO rewrite, NO guessing — ONLY literal transcription."
       });
+
       return transcript;
     }
 
@@ -51,33 +56,34 @@ app.post("/ingest", upload.fields([{ name: "agent_audio" }, { name: "customer_au
     const agentText = await transcribe(agentPath);
     const customerText = await transcribe(customerPath);
 
-    console.log("🎤 Agent Transcript:", agentText);
-    console.log("🗣️ Customer Transcript:", customerText);
+    console.log("🎤 RAW Agent Transcript:", agentText);
+    console.log("🗣️ RAW Customer Transcript:", customerText);
 
-    // ASYNC GPT QA — no response wait
+    // GPT QA RUNS IN BACKGROUND
     (async () => {
 
       console.log("🔎 Running GPT QA...");
 
       const auditPrompt = `
-      You are a call QA auditor for NBFC loan recovery.
-      Evaluate CALL TRANSCRIPT.
+      Evaluate call RAW transcript data (Hindi/Hinglish).
+      Extract sentiment & compliance without rewriting speech.
 
-      AGENT:
+      AGENT RAW:
       ${agentText}
 
-      CUSTOMER:
+      CUSTOMER RAW:
       ${customerText}
 
-      Output JSON:
+      Output JSON only:
       {
-       "call_summary": "...",
-       "customer_sentiment": "...",
-       "agent_professionalism_score": 0-10,
-       "urgency_creation_score": 0-10,
-       "negative_keywords_detected": [],
-       "rbi_violation_detected": true/false
-      }`;
+        "call_summary": "...",
+        "customer_sentiment": "...",
+        "agent_professionalism_score": 0-10,
+        "urgency_creation_score": 0-10,
+        "negative_keywords_detected": [],
+        "rbi_violation_detected": true/false
+      }
+      `;
 
       const qa = await openai.chat.completions.create({
         model: "gpt-4.1",
@@ -87,12 +93,11 @@ app.post("/ingest", upload.fields([{ name: "agent_audio" }, { name: "customer_au
 
       console.log("🔍 QA RESULT:", qa.choices[0].message.content);
 
-      // TODO: later → save to database
+      // TODO: store result in database (next phase)
 
     })();
 
-    // FAST RESPONSE to Render server
-    return res.json({ status: "ok", message: "Audio received → processing in background" });
+    return res.json({ status: "ok", message: "Audio received — processing in background" });
 
   } catch (error) {
     console.error("❗ Starblicks Error:", error);
