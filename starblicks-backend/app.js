@@ -37,67 +37,42 @@ app.post("/ingest", upload.fields([{ name: "agent_audio" }, { name: "customer_au
     agentPath = ensureMp3(agentPath);
     customerPath = ensureMp3(customerPath);
 
+    // ---- TRUE RAW WHISPER TRANSCRIPTION ----
     async function transcribe(file) {
-      const audioData = fs.readFileSync(file).toString('base64');
-      const transcriptResponse = await openai.chat.completions.create({
-          model: "gpt-4o-audio-preview",
-          messages: [
-              {
-                role: "system",
-                content: "You are a raw Hindi/Hinglish transcription engine with timestamp diarization."
-              },
-              {
-                role: "user",
-                content: [
-                  {
-                    type: "input_audio",
-                    input_audio: {
-                      data: audioData,
-                      format: "mp3"
-                    }
-                  },
-                  {
-                    type: "text",
-                    text: "Return output EXACTLY as:\nSpeaker <timestamp in seconds>\ntext"
-                  }
-                ]
-              }
-          ]
+      const audioData = fs.createReadStream(file);
+
+      const transcriptResp = await openai.audio.transcriptions.create({
+        model: "whisper-1",
+        file: audioData,
+        language: "hi",
+        temperature: 0,
+        response_format: "verbose_json",
+        prompt: "Transcribe EXACT spoken Hindi/Hinglish. DO NOT rewrite. DO NOT correct grammar. EXACT phonetic speech including mistakes, filler sounds (haan, hmm), slang, incomplete words."
       });
 
-      return transcriptResponse.choices[0].message.content;
+      return transcriptResp;
     }
 
-    console.log("🔁 Running diarized transcription...");
-    const agentText = await transcribe(agentPath);
-    const customerText = await transcribe(customerPath);
+    console.log("🔁 Running WHISPER TRUE RAW mode...");
 
-    console.log("🎤 Agent Transcript:\n", agentText);
-    console.log("🗣️ Customer Transcript:\n", customerText);
+    const agentWhisper = await transcribe(agentPath);
+    const customerWhisper = await transcribe(customerPath);
 
-    // 🔥 MERGING ENGINE — THIS IS THE MAGIC !!!
-    function parseTranscript(rawText, speaker) {
-      const lines = rawText.split("\n").filter(l => l.trim() !== "");
-      const entries = [];
+    console.log("🎤 RAW Agent Whisper JSON:\n", agentWhisper);
+    console.log("🗣️ RAW Customer Whisper JSON:\n", customerWhisper);
 
-      for (let i = 0; i < lines.length; i += 2) {
-        const timeLine = lines[i].trim();
-        const textLine = lines[i + 1]?.trim() || "";
+    // ---- BUILD TIMELINE ----
 
-        const parts = timeLine.split(" ");
-        const timestamp = parseFloat(parts[1]) || 0;
-
-        entries.push({
-          speaker,
-          timestamp,
-          text: textLine
-        });
-      }
-      return entries;
+    function buildEntries(segments, speaker) {
+      return segments.map(seg => ({
+        speaker,
+        timestamp: seg.start,
+        text: seg.text.trim()
+      }));
     }
 
-    const agentEntries = parseTranscript(agentText, "Agent");
-    const customerEntries = parseTranscript(customerText, "Customer");
+    const agentEntries = buildEntries(agentWhisper.segments, "Agent");
+    const customerEntries = buildEntries(customerWhisper.segments, "Customer");
 
     let merged = agentEntries.concat(customerEntries);
     merged.sort((a, b) => a.timestamp - b.timestamp);
@@ -107,16 +82,19 @@ app.post("/ingest", upload.fields([{ name: "agent_audio" }, { name: "customer_au
       finalTranscript += `${m.timestamp.toFixed(1)}s ${m.speaker}: ${m.text}\n`;
     });
 
-    console.log("🧩 MERGED TRANSCRIPT:\n", finalTranscript);
+    console.log("🧩 FINAL RAW MERGED TRANSCRIPT:\n", finalTranscript);
+
+    // ---- GPT QA (NO TRANSCRIPTION — ONLY ANALYSIS) ----
 
     console.log("🔎 Running GPT QA...");
+
     (async () => {
       const auditPrompt = `
-      Analyze this merged transcript:
+      Analyze this call conversation BUT DO NOT rewrite any transcript:
 
       ${finalTranscript}
 
-      Output JSON ONLY:
+      Output JSON only:
       {
         "call_summary": "...",
         "customer_sentiment": "...",
@@ -126,18 +104,17 @@ app.post("/ingest", upload.fields([{ name: "agent_audio" }, { name: "customer_au
         "rbi_violation_detected": true/false
       }
       `;
-      
+
       const qa = await openai.chat.completions.create({
         model: "gpt-4.1",
         response_format: { type: "json_object" },
         messages: [{ role: "user", content: auditPrompt }]
       });
 
-      console.log("🔍 QA RESULT:", qa.choices[0].message.content);
-
+      console.log("🔍 GPT QA RESULT:", qa.choices[0].message.content);
     })();
 
-    return res.json({ status: "ok", message: "Audio received — merged transcript in progress" });
+    return res.json({ status: "ok", message: "WHISPER transcription running — GPT QA in background" });
 
   } catch (error) {
     console.error("❗ STARBLICKS ERROR:", error);
