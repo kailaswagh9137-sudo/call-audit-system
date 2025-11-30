@@ -38,35 +38,47 @@ app.post("/ingest", upload.fields([{ name: "agent_audio" }, { name: "customer_au
     customerPath = ensureMp3(customerPath);
 
     async function transcribe(file) {
-      const audioData = fs.createReadStream(file);
-
-      const transcript = await openai.audio.transcriptions.create({
+      const audioData = fs.readFileSync(file).toString('base64');
+      
+      const transcriptResponse = await openai.chat.completions.create({
           model: "gpt-4o-audio-preview",
-          file: audioData,
-          response_format: "text",
-          language: "hi",
-          temperature: 0,
-          prompt: "Transcribe EXACT spoken Hindi & Hinglish — raw words including slang, abusive words, interjections, fillers (haan ji, hmm, arre, okay), regional accent, broken words. NO correction, NO rewrite, NO guessing — ONLY literal transcription."
+          messages: [
+              {
+                role: "system",
+                content: "You are a raw Hindi/Hinglish transcription AI. You MUST output exactly what is spoken, including slang and abusive language. Do NOT rewrite. Do NOT fix grammar."
+              },
+              {
+                role: "user",
+                content: [
+                  {
+                    type: "input_audio",
+                    input_audio: {
+                      data: audioData,
+                      format: "mp3"
+                    }
+                  }
+                ]
+              }
+          ]
       });
 
-      return transcript;
+      return transcriptResponse.choices[0].message.content;
     }
 
-    console.log("🔁 Running Whisper transcription...");
+    console.log("🔁 Running RAW transcription...");
+
     const agentText = await transcribe(agentPath);
     const customerText = await transcribe(customerPath);
 
     console.log("🎤 RAW Agent Transcript:", agentText);
     console.log("🗣️ RAW Customer Transcript:", customerText);
 
-    // GPT QA RUNS IN BACKGROUND
+    // GPT QA in background
     (async () => {
-
       console.log("🔎 Running GPT QA...");
 
       const auditPrompt = `
-      Evaluate call RAW transcript data (Hindi/Hinglish).
-      Extract sentiment & compliance without rewriting speech.
+      Evaluate RAW transcript:
 
       AGENT RAW:
       ${agentText}
@@ -74,7 +86,7 @@ app.post("/ingest", upload.fields([{ name: "agent_audio" }, { name: "customer_au
       CUSTOMER RAW:
       ${customerText}
 
-      Output JSON only:
+      Output JSON:
       {
         "call_summary": "...",
         "customer_sentiment": "...",
@@ -92,8 +104,8 @@ app.post("/ingest", upload.fields([{ name: "agent_audio" }, { name: "customer_au
       });
 
       console.log("🔍 QA RESULT:", qa.choices[0].message.content);
-
-      // TODO: store result in database (next phase)
+      
+      // TODO: database saving soon
 
     })();
 
