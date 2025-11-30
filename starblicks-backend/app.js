@@ -37,53 +37,57 @@ app.post("/ingest", upload.fields([{ name: "agent_audio" }, { name: "customer_au
     agentPath = ensureMp3(agentPath);
     customerPath = ensureMp3(customerPath);
 
-    async function transcribe(file) {
+    async function transcribe(file, speakerLabel) {
       const audioData = fs.readFileSync(file).toString('base64');
-      
+
       const transcriptResponse = await openai.chat.completions.create({
           model: "gpt-4o-audio-preview",
           messages: [
-              {
-                role: "system",
-                content: "You are a raw Hindi/Hinglish transcription AI. You MUST output exactly what is spoken, including slang and abusive language. Do NOT rewrite. Do NOT fix grammar."
-              },
-              {
-                role: "user",
-                content: [
-                  {
-                    type: "input_audio",
-                    input_audio: {
-                      data: audioData,
-                      format: "mp3"
-                    }
+            {
+              role: "system",
+              content: "You are a Hindi/Hinglish raw speech transcription engine with diarization formatting."
+            },
+            {
+              role: "user",
+              content: [
+                {
+                  type: "input_audio",
+                  input_audio: {
+                    data: audioData,
+                    format: "mp3"
                   }
-                ]
-              }
+                },
+                {
+                  type: "text",
+                  text: `Return output EXACTLY in this format:\n\n${speakerLabel} <timestamp in seconds>\n<spoken line>\n\nRules:\n• DO NOT rewrite or paraphrase\n• DO NOT correct grammar\n• EXACT spoken words only\n• Keep filler words (haan, hmm, arre, ok)\n• Show timestamps at natural pauses\n• Keep profanity uncensored`
+                }
+              ]
+            }
           ]
       });
 
       return transcriptResponse.choices[0].message.content;
     }
 
-    console.log("🔁 Running RAW transcription...");
+    console.log("🔁 Running diarized formatted transcription...");
 
-    const agentText = await transcribe(agentPath);
-    const customerText = await transcribe(customerPath);
+    const agentText = await transcribe(agentPath, "Agent");
+    const customerText = await transcribe(customerPath, "Customer");
 
-    console.log("🎤 RAW Agent Transcript:", agentText);
-    console.log("🗣️ RAW Customer Transcript:", customerText);
+    console.log("🎤 Agent Formatted Transcript:\n", agentText);
+    console.log("🗣️ Customer Formatted Transcript:\n", customerText);
 
     // GPT QA in background
     (async () => {
       console.log("🔎 Running GPT QA...");
 
       const auditPrompt = `
-      Evaluate RAW transcript:
+      Analyze the following RAW formatted transcript with timestamps and speaker labels.
 
-      AGENT RAW:
+      Agent Transcript:
       ${agentText}
 
-      CUSTOMER RAW:
+      Customer Transcript:
       ${customerText}
 
       Output JSON:
@@ -94,8 +98,7 @@ app.post("/ingest", upload.fields([{ name: "agent_audio" }, { name: "customer_au
         "urgency_creation_score": 0-10,
         "negative_keywords_detected": [],
         "rbi_violation_detected": true/false
-      }
-      `;
+      }`;
 
       const qa = await openai.chat.completions.create({
         model: "gpt-4.1",
@@ -104,12 +107,10 @@ app.post("/ingest", upload.fields([{ name: "agent_audio" }, { name: "customer_au
       });
 
       console.log("🔍 QA RESULT:", qa.choices[0].message.content);
-      
-      // TODO: database saving soon
 
     })();
 
-    return res.json({ status: "ok", message: "Audio received — processing in background" });
+    return res.json({ status: "ok", message: "Audio received — diarized transcription running" });
 
   } catch (error) {
     console.error("❗ Starblicks Error:", error);
