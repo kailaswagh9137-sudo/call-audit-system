@@ -44,7 +44,7 @@ app.post("/upload", upload.single("audio"), async (req, res) => {
       });
     });
 
-    // SEND TO STARBLICKS ASYNC (non-blocking)
+    // SEND TO STARBLICKS ASYNC
     const form = new FormData();
     form.append("agent_audio", fs.createReadStream(agentOut));
     form.append("customer_audio", fs.createReadStream(customerOut));
@@ -55,7 +55,6 @@ app.post("/upload", upload.single("audio"), async (req, res) => {
     .then(() => console.log("Starblicks received audio"))
     .catch(err => console.error("Error sending to Starblicks:", err));
 
-    // IMMEDIATE RESPONSE TO CLIENT
     return res.json({
       status: "ok",
       message: "Audio split & Starblicks को भेज दिया गया — processing in background",
