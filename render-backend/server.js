@@ -9,7 +9,6 @@ const FormData = require("form-data");
 
 const app = express();
 
-// uploads aur processed folders ke liye
 if (!fs.existsSync("uploads")) fs.mkdirSync("uploads");
 if (!fs.existsSync("processed")) fs.mkdirSync("processed");
 
@@ -25,23 +24,19 @@ app.post("/upload", upload.single("audio"), async (req, res) => {
       return res.status(400).json({ status: "error", message: "No audio file uploaded" });
     }
 
-    const inputFile = req.file.path; // e.g. uploads/xyz.mp3
+    const inputFile = req.file.path;
     const baseName = path.parse(req.file.originalname).name;
 
     const agentOut = `processed/${baseName}_agent.mp3`;
     const customerOut = `processed/${baseName}_customer.mp3`;
 
-    // FFmpeg command with correct binary path
     const cmd = `"${ffmpegPath}" -i "${inputFile}" -map_channel 0.0.0 "${agentOut}" -map_channel 0.0.1 "${customerOut}"`;
 
     console.log("Running FFmpeg:", cmd);
 
-    // 1) Pehle FFmpeg run karo
     await new Promise((resolve, reject) => {
-      exec(cmd, (err, stdout, stderr) => {
+      exec(cmd, (err) => {
         if (err) {
-          console.error("FFmpeg error:", err);
-          console.error(stderr);
           return reject(err);
         }
         console.log("FFmpeg done");
@@ -49,26 +44,21 @@ app.post("/upload", upload.single("audio"), async (req, res) => {
       });
     });
 
-    // 2) Ab Starblicks ko bhejna hai
+    // SEND TO STARBLICKS ASYNC (non-blocking)
     const form = new FormData();
     form.append("agent_audio", fs.createReadStream(agentOut));
     form.append("customer_audio", fs.createReadStream(customerOut));
 
-    console.log("Sending files to Starblicks...");
+    axios.post("https://starblicks-audit-system.onrender.com/ingest", form, {
+      headers: form.getHeaders()
+    })
+    .then(() => console.log("Starblicks received audio"))
+    .catch(err => console.error("Error sending to Starblicks:", err));
 
-    const starblicksResponse = await axios.post(
-      "https://starblicks-audit-system.onrender.com/ingest",
-      form,
-      { headers: form.getHeaders() }
-    );
-
-    console.log("Starblicks response:", starblicksResponse.data);
-
-    // 3) Client ko final response
+    // IMMEDIATE RESPONSE TO CLIENT
     return res.json({
       status: "ok",
-      message: "Audio split ho gaya aur Starblicks ko send kar diya.",
-      starblicks_result: starblicksResponse.data,
+      message: "Audio split & Starblicks को भेज दिया गया — processing in background",
       agent_audio: agentOut,
       customer_audio: customerOut
     });
@@ -77,7 +67,7 @@ app.post("/upload", upload.single("audio"), async (req, res) => {
     console.error("Upload route error:", error);
     return res.status(500).json({
       status: "error",
-      message: "Koi error aa gaya (FFmpeg ya Starblicks).",
+      message: "Processing failed",
       error: String(error.message || error)
     });
   }
