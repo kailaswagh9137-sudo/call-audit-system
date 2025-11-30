@@ -37,60 +37,86 @@ app.post("/ingest", upload.fields([{ name: "agent_audio" }, { name: "customer_au
     agentPath = ensureMp3(agentPath);
     customerPath = ensureMp3(customerPath);
 
-    async function transcribe(file, speakerLabel) {
+    async function transcribe(file) {
       const audioData = fs.readFileSync(file).toString('base64');
-
       const transcriptResponse = await openai.chat.completions.create({
           model: "gpt-4o-audio-preview",
           messages: [
-            {
-              role: "system",
-              content: "You are a Hindi/Hinglish raw speech transcription engine with diarization formatting."
-            },
-            {
-              role: "user",
-              content: [
-                {
-                  type: "input_audio",
-                  input_audio: {
-                    data: audioData,
-                    format: "mp3"
+              {
+                role: "system",
+                content: "You are a raw Hindi/Hinglish transcription engine with timestamp diarization."
+              },
+              {
+                role: "user",
+                content: [
+                  {
+                    type: "input_audio",
+                    input_audio: {
+                      data: audioData,
+                      format: "mp3"
+                    }
+                  },
+                  {
+                    type: "text",
+                    text: "Return output EXACTLY as:\nSpeaker <timestamp in seconds>\ntext"
                   }
-                },
-                {
-                  type: "text",
-                  text: `Return output EXACTLY in this format:\n\n${speakerLabel} <timestamp in seconds>\n<spoken line>\n\nRules:\n• DO NOT rewrite or paraphrase\n• DO NOT correct grammar\n• EXACT spoken words only\n• Keep filler words (haan, hmm, arre, ok)\n• Show timestamps at natural pauses\n• Keep profanity uncensored`
-                }
-              ]
-            }
+                ]
+              }
           ]
       });
 
       return transcriptResponse.choices[0].message.content;
     }
 
-    console.log("🔁 Running diarized formatted transcription...");
+    console.log("🔁 Running diarized transcription...");
+    const agentText = await transcribe(agentPath);
+    const customerText = await transcribe(customerPath);
 
-    const agentText = await transcribe(agentPath, "Agent");
-    const customerText = await transcribe(customerPath, "Customer");
+    console.log("🎤 Agent Transcript:\n", agentText);
+    console.log("🗣️ Customer Transcript:\n", customerText);
 
-    console.log("🎤 Agent Formatted Transcript:\n", agentText);
-    console.log("🗣️ Customer Formatted Transcript:\n", customerText);
+    // 🔥 MERGING ENGINE — THIS IS THE MAGIC !!!
+    function parseTranscript(rawText, speaker) {
+      const lines = rawText.split("\n").filter(l => l.trim() !== "");
+      const entries = [];
 
-    // GPT QA in background
+      for (let i = 0; i < lines.length; i += 2) {
+        const timeLine = lines[i].trim();
+        const textLine = lines[i + 1]?.trim() || "";
+
+        const parts = timeLine.split(" ");
+        const timestamp = parseFloat(parts[1]) || 0;
+
+        entries.push({
+          speaker,
+          timestamp,
+          text: textLine
+        });
+      }
+      return entries;
+    }
+
+    const agentEntries = parseTranscript(agentText, "Agent");
+    const customerEntries = parseTranscript(customerText, "Customer");
+
+    let merged = agentEntries.concat(customerEntries);
+    merged.sort((a, b) => a.timestamp - b.timestamp);
+
+    let finalTranscript = "";
+    merged.forEach(m => {
+      finalTranscript += `${m.timestamp.toFixed(1)}s ${m.speaker}: ${m.text}\n`;
+    });
+
+    console.log("🧩 MERGED TRANSCRIPT:\n", finalTranscript);
+
+    console.log("🔎 Running GPT QA...");
     (async () => {
-      console.log("🔎 Running GPT QA...");
-
       const auditPrompt = `
-      Analyze the following RAW formatted transcript with timestamps and speaker labels.
+      Analyze this merged transcript:
 
-      Agent Transcript:
-      ${agentText}
+      ${finalTranscript}
 
-      Customer Transcript:
-      ${customerText}
-
-      Output JSON:
+      Output JSON ONLY:
       {
         "call_summary": "...",
         "customer_sentiment": "...",
@@ -98,8 +124,9 @@ app.post("/ingest", upload.fields([{ name: "agent_audio" }, { name: "customer_au
         "urgency_creation_score": 0-10,
         "negative_keywords_detected": [],
         "rbi_violation_detected": true/false
-      }`;
-
+      }
+      `;
+      
       const qa = await openai.chat.completions.create({
         model: "gpt-4.1",
         response_format: { type: "json_object" },
@@ -110,10 +137,10 @@ app.post("/ingest", upload.fields([{ name: "agent_audio" }, { name: "customer_au
 
     })();
 
-    return res.json({ status: "ok", message: "Audio received — diarized transcription running" });
+    return res.json({ status: "ok", message: "Audio received — merged transcript in progress" });
 
   } catch (error) {
-    console.error("❗ Starblicks Error:", error);
+    console.error("❗ STARBLICKS ERROR:", error);
     res.status(500).json({
       status: "error",
       message: "Processing failed",
