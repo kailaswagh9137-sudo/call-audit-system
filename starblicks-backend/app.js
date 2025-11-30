@@ -1,3 +1,25 @@
+require('dotenv').config();
+console.log("🔍 OPENAI KEY STATUS:", process.env.OPENAI_API_KEY ? "LOADED" : "MISSING");
+
+const express = require("express");
+const multer = require("multer");
+const fs = require("fs");
+const OpenAI = require("openai");
+
+if (!fs.existsSync("uploads")) fs.mkdirSync("uploads");
+
+const app = express();
+const upload = multer({ dest: "uploads/" });
+
+const openai = new OpenAI({
+    apiKey: process.env.OPENAI_API_KEY
+});
+
+app.get("/", (req, res) => {
+    res.send("Starblicks backend online 🚀");
+});
+
+// ⭐⭐ FIXED FINAL INGEST ROUTE ⭐⭐
 app.post("/ingest", upload.fields([{ name: "agent_audio" }, { name: "customer_audio" }]), async (req, res) => {
     try {
         let agentPath = req.files["agent_audio"][0].path;
@@ -7,7 +29,6 @@ app.post("/ingest", upload.fields([{ name: "agent_audio" }, { name: "customer_au
         console.log("Agent:", agentPath);
         console.log("Customer:", customerPath);
 
-        // Ensure extension
         function ensureMp3(sourcePath) {
             const newPath = sourcePath + ".mp3";
             fs.renameSync(sourcePath, newPath);
@@ -53,3 +74,5 @@ app.post("/ingest", upload.fields([{ name: "agent_audio" }, { name: "customer_au
         });
     }
 });
+
+app.listen(4000, () => console.log("Starblicks backend running on port 4000"));
